@@ -17,6 +17,8 @@ export function createArEngine({
   const sceneRef = shallowRef(null)
   let containerRef = null
   let currentTargets = []
+  let operationGeneration = 0
+  const pendingStartCancels = new Set()
 
   function patchSystemLifecycle(system) {
     if (!system || system.__cyberworldPatched) return
@@ -58,17 +60,22 @@ export function createArEngine({
     }
   }
 
-  function startTracking(scene, waitForRender) {
+  function startTracking(scene, waitForRender, generation = operationGeneration) {
     if (sceneStarter) return sceneStarter(scene, { waitForRender })
     return new Promise((resolve, reject) => {
       let timer
       const cleanup = () => {
         clearTimeout(timer)
+        pendingStartCancels.delete(cancel)
         scene.removeEventListener('arReady', ready)
         scene.removeEventListener('arError', failed)
         scene.removeEventListener('renderstart', start)
       }
       const ready = () => {
+        if (generation !== operationGeneration) {
+          cancel()
+          return
+        }
         cleanup()
         resolve()
       }
@@ -77,6 +84,10 @@ export function createArEngine({
         reject(codedError('MindAR 启动失败', 'AR_START_FAILED', event.detail?.error))
       }
       const start = () => {
+        if (generation !== operationGeneration) {
+          cancel()
+          return
+        }
         try {
           const system = scene.systems?.['mindar-image-system']
           if (!system) throw new Error('MindAR system unavailable')
@@ -87,6 +98,11 @@ export function createArEngine({
           reject(codedError('MindAR 无法启动', 'AR_START_FAILED', error))
         }
       }
+      const cancel = () => {
+        cleanup()
+        reject(codedError('AR 操作已取消', 'AR_OPERATION_CANCELLED'))
+      }
+      pendingStartCancels.add(cancel)
       scene.addEventListener('arReady', ready, { once: true })
       scene.addEventListener('arError', failed, { once: true })
       if (waitForRender) scene.addEventListener('renderstart', start, { once: true })
@@ -126,9 +142,12 @@ export function createArEngine({
     appendTargets(scene, targets)
   }
 
-  async function waitForAnchors(scene, count) {
+  async function waitForAnchors(scene, count, generation) {
     const deadline = Date.now() + 2000
     while ((scene.systems?.['mindar-image-system']?.anchorEntities?.length ?? 0) < count) {
+      if (generation !== operationGeneration) {
+        throw codedError('AR 操作已取消', 'AR_OPERATION_CANCELLED')
+      }
       if (Date.now() >= deadline) throw codedError('AR 锚点初始化超时', 'ANCHOR_START_TIMEOUT')
       await new Promise((resolve) => setTimeout(resolve, 0))
     }
@@ -163,14 +182,15 @@ export function createArEngine({
   }
 
   async function restart(url, targets) {
+    const generation = operationGeneration
     const scene = sceneRef.value
     const system = scene?.systems?.['mindar-image-system']
     if (!scene || !system) throw codedError('AR 引擎尚未挂载', 'AR_NOT_MOUNTED')
     stopTracking(scene)
     replaceTargets(scene, targets)
     configureSystem(system, url)
-    if (!sceneStarter) await waitForAnchors(scene, targets.length)
-    await startTracking(scene, false)
+    if (!sceneStarter) await waitForAnchors(scene, targets.length, generation)
+    await startTracking(scene, false, generation)
     return scene
   }
 
@@ -185,6 +205,9 @@ export function createArEngine({
       const previousUrl = lease.activeUrl
       const stagedUrl = lease.stage(buffer)
       containerRef.hidden = false
+      sceneRef.value.play?.()
+      sceneRef.value.renderer?.setAnimationLoop?.(sceneRef.value.render)
+      requestAnimationFrame(() => sceneRef.value?.resize?.())
       try {
         currentTargets = [...targets]
         await restart(stagedUrl, currentTargets)
@@ -193,6 +216,10 @@ export function createArEngine({
       } catch (error) {
         lease.rollback()
         currentTargets = previousTargets
+        if (error?.code === 'AR_OPERATION_CANCELLED') {
+          park()
+          throw error
+        }
         try {
           await restart(previousUrl, previousTargets)
         } catch {
@@ -208,7 +235,7 @@ export function createArEngine({
     const stagedUrl = lease.stage(buffer)
     const scene = buildScene(stagedUrl, currentTargets)
     sceneRef.value = scene
-    const ready = startTracking(scene, true)
+    const ready = startTracking(scene, true, operationGeneration)
     containerRef.hidden = false
     containerRef.replaceChildren(scene)
     try {
@@ -216,6 +243,11 @@ export function createArEngine({
       lease.commit()
       return scene
     } catch (error) {
+      if (error?.code === 'AR_OPERATION_CANCELLED') {
+        lease.commit()
+        park()
+        throw error
+      }
       stopTracking(scene)
       scene.remove()
       sceneRef.value = null
@@ -239,6 +271,10 @@ export function createArEngine({
     } catch (error) {
       lease.rollback()
       currentTargets = previousTargets
+      if (error?.code === 'AR_OPERATION_CANCELLED') {
+        park()
+        throw error
+      }
       try {
         await restart(previousUrl, previousTargets)
       } catch (rollbackError) {
@@ -270,8 +306,12 @@ export function createArEngine({
   }
 
   function park() {
+    operationGeneration += 1
+    for (const cancel of [...pendingStartCancels]) cancel()
     const scene = sceneRef.value
     stopTracking(scene)
+    scene?.pause?.()
+    scene?.renderer?.setAnimationLoop?.(null)
     if (containerRef) containerRef.hidden = true
   }
 

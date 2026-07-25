@@ -58,6 +58,10 @@ describe('isolated AR engine', () => {
   it('parks and reuses one permanently connected scene across route visits', async () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
+    const pause = vi.fn()
+    const play = vi.fn()
+    const resize = vi.fn()
+    const setAnimationLoop = vi.fn()
     const system = {
       start: vi.fn(),
       stop: vi.fn(),
@@ -73,6 +77,11 @@ describe('isolated AR engine', () => {
         revokeObjectURL: vi.fn(),
       },
       sceneStarter: async (scene) => {
+        scene.pause = pause
+        scene.play = play
+        scene.resize = resize
+        scene.render = vi.fn()
+        scene.renderer = { setAnimationLoop }
         scene.systems ??= { 'mindar-image-system': system }
       },
     })
@@ -82,12 +91,38 @@ describe('isolated AR engine', () => {
     engine.park()
     expect(container.hidden).toBe(true)
     expect(originalScene.isConnected).toBe(true)
+    expect(pause).toHaveBeenCalledOnce()
+    expect(setAnimationLoop).toHaveBeenLastCalledWith(null)
 
     await engine.mount(container, new ArrayBuffer(2), [{ id: 'b', emoji: '🎝' }])
     expect(engine.scene.value).toBe(originalScene)
     expect(container.hidden).toBe(false)
     expect(container.querySelectorAll('a-scene')).toHaveLength(1)
+    expect(play).toHaveBeenCalledOnce()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(resize).toHaveBeenCalled()
     engine.destroy()
     container.remove()
+  })
+
+  it('cancels a pending MindAR readiness wait when parked', async () => {
+    const container = document.createElement('div')
+    const system = { start: vi.fn(), stop: vi.fn() }
+    const engine = createArEngine({
+      urlApi: {
+        createObjectURL: vi.fn(() => 'blob:test'),
+        revokeObjectURL: vi.fn(),
+      },
+    })
+
+    const mounting = engine.mount(container, new ArrayBuffer(2), [{ id: 'a', emoji: '✨' }])
+    const scene = container.querySelector('a-scene')
+    scene.systems = { 'mindar-image-system': system }
+    scene.dispatchEvent(new Event('renderstart'))
+    engine.park()
+
+    await expect(mounting).rejects.toMatchObject({ code: 'AR_OPERATION_CANCELLED' })
+    expect(system.stop).toHaveBeenCalledOnce()
+    engine.destroy()
   })
 })

@@ -480,6 +480,8 @@ onBeforeUnmount(() => {
   lifecycle.detach()
   toastTimers.forEach((timer) => clearTimeout(timer))
   toastTimers.clear()
+  camera.stop()
+  arEngine.park()
   engineMutation = engineMutation.finally(() => {
     camera.stop()
     resetTracking()
