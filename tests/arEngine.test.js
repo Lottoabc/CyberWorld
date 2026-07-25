@@ -54,4 +54,33 @@ describe('isolated AR engine', () => {
     expect(system.stop).toHaveBeenCalledOnce()
     engine.destroy()
   })
+
+  it('removes global listeners registered while an A-Frame scene starts', async () => {
+    const container = document.createElement('div')
+    const listener = vi.fn()
+    const engine = createArEngine({
+      urlApi: {
+        createObjectURL: vi.fn(() => 'blob:test'),
+        revokeObjectURL: vi.fn(),
+      },
+      sceneStarter: async (scene) => {
+        window.addEventListener('resize', listener)
+        scene.systems = {
+          'mindar-image-system': {
+            start: vi.fn(),
+            stop: vi.fn(),
+            video: document.createElement('video'),
+          },
+        }
+      },
+    })
+
+    await engine.mount(container, new ArrayBuffer(2), [{ id: 'a', emoji: '✨' }])
+    window.dispatchEvent(new Event('resize'))
+    expect(listener).toHaveBeenCalledOnce()
+
+    engine.destroy()
+    window.dispatchEvent(new Event('resize'))
+    expect(listener).toHaveBeenCalledOnce()
+  })
 })

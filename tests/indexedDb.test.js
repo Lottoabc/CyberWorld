@@ -1,3 +1,4 @@
+import { Blob as NodeBlob } from 'node:buffer'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   deleteImage,
@@ -18,7 +19,7 @@ beforeEach(async () => {
 
 describe('IndexedDB persistence', () => {
   it('stores and deletes target image blobs', async () => {
-    const blob = new Blob(['image'], { type: 'image/jpeg' })
+    const blob = new NodeBlob(['image'], { type: 'image/jpeg' })
     await putImage('target-a', blob)
     const stored = await getImage('target-a')
     expect(stored).toMatchObject({ size: 5, type: 'image/jpeg' })

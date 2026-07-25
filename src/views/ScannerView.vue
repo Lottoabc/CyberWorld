@@ -51,12 +51,25 @@ let toastSerial = 0
 let projectionFrame = 0
 let storageWarningShown = false
 let engineMutation = Promise.resolve()
+let disposed = false
 const toastTimers = new Set()
 
 function mutateEngine(operation) {
-  const result = engineMutation.then(operation, operation)
+  const guardedOperation = () => {
+    if (disposed) {
+      throw Object.assign(new Error('扫描页面已经关闭'), { code: 'VIEW_DISPOSED' })
+    }
+    return operation()
+  }
+  const result = engineMutation.then(guardedOperation, guardedOperation)
   engineMutation = result.catch(() => {})
   return result
+}
+
+function ensureActive() {
+  if (disposed) {
+    throw Object.assign(new Error('扫描页面已经关闭'), { code: 'VIEW_DISPOSED' })
+  }
 }
 
 const lifecycle = createLifecycleRecovery({
@@ -92,6 +105,10 @@ const activeMessages = computed(() =>
 )
 
 function persistMetadata(targets = targetStore.targets, messages = messageStore.messages, required = false) {
+  if (isSessionOnlyPersistence()) {
+    warnSessionStorage()
+    return true
+  }
   try {
     saveLocalState(localStorage, { targets, messages })
     return true
@@ -188,6 +205,11 @@ function updateProjection() {
 async function reconcileCompiledManifest() {
   const targetIds = await getCompiledTargetIds()
   warnSessionStorage()
+  if (isSessionOnlyPersistence() && !Array.isArray(targetIds)) {
+    targetStore.hydrate([])
+    messageStore.hydrate([])
+    return
+  }
   if (!Array.isArray(targetIds)) return
   const currentById = new Map(targetStore.targets.map((target) => [target.id, target]))
   const reconciled = targetIds.map((id, index) => currentById.get(id) ?? {
@@ -228,14 +250,17 @@ async function startScanning() {
   })
   try {
     await reconcileCompiledManifest()
+    ensureActive()
     if (targetStore.targets.length > 0) {
       await mountExistingTargets()
     } else {
       await camera.start(previewVideo.value)
     }
+    ensureActive()
     cameraReady.value = true
     setOverlay({ visible: false })
   } catch (error) {
+    if (disposed || error?.code === 'VIEW_DISPOSED') return
     targetStore.failCompile(error)
     const denied = ['CAMERA_DENIED', 'AR_START_FAILED'].includes(error?.code)
     setOverlay({
@@ -249,7 +274,7 @@ async function startScanning() {
 }
 
 async function captureTarget() {
-  if (!cameraReady.value || targetStore.isCompiling || targetStore.targets.length >= 5) return
+  if (disposed || !cameraReady.value || targetStore.isCompiling || targetStore.targets.length >= 5) return
   let candidate = null
   let oldBuffer = null
   let oldTargetIds = targetStore.targets.map((target) => target.id)
@@ -258,6 +283,7 @@ async function captureTarget() {
     targetStore.beginCompile()
     const sourceVideo = targetStore.targets.length > 0 ? arEngine.getVideoElement() : previewVideo.value
     const image = await camera.captureFrame(sourceVideo)
+    ensureActive()
     candidate = targetStore.addCandidate({
       id: crypto.randomUUID(),
       imageKey: '',
@@ -269,6 +295,7 @@ async function captureTarget() {
     const nextTargets = [...targetStore.targets, candidate]
     const blobs = await loadImages(nextTargets)
     const buffer = await compiler.compile(blobs, targetStore.setCompileProgress)
+    ensureActive()
     oldBuffer = await getMindBuffer()
     oldTargetIds = await getCompiledTargetIds() ?? oldTargetIds
     await putCompiledState(buffer, nextTargets.map((target) => target.id))
@@ -310,6 +337,7 @@ async function captureTarget() {
       }
     }
     if (candidate) await deleteImage(candidate.imageKey).catch(() => {})
+    if (disposed || error?.code === 'VIEW_DISPOSED') return
     targetStore.failCompile(error)
     if (targetStore.targets.length === 0 && !camera.stream.value) {
       await camera.start(previewVideo.value).catch(() => {})
@@ -320,7 +348,7 @@ async function captureTarget() {
 }
 
 async function removeTarget(target) {
-  if (targetStore.isCompiling) return
+  if (disposed || targetStore.isCompiling) return
   const remaining = targetStore.targets.filter((item) => item.id !== target.id)
   const remainingMessages = messageStore.messages.filter((message) => message.targetId !== target.id)
   const oldBuffer = await getMindBuffer().catch(() => null)
@@ -337,6 +365,7 @@ async function removeTarget(target) {
     } else {
       const blobs = await loadImages(remaining)
       const buffer = await compiler.compile(blobs, targetStore.setCompileProgress)
+      ensureActive()
       await putCompiledState(buffer, remaining.map((item) => item.id))
       warnSessionStorage()
       targetStore.beginSwap()
@@ -364,6 +393,7 @@ async function removeTarget(target) {
       bindTargetEvents(targetStore.targets)
       attachRecoveryCanvas()
     }
+    if (disposed || error?.code === 'VIEW_DISPOSED') return
     targetStore.failCompile(error)
     setOverlay({ visible: false })
     showToast(error.message || '删除失败', '!')
@@ -438,13 +468,16 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  disposed = true
   cancelAnimationFrame(projectionFrame)
   lifecycle.detach()
   toastTimers.forEach((timer) => clearTimeout(timer))
   toastTimers.clear()
-  camera.stop()
-  resetTracking()
-  arEngine.destroy()
+  engineMutation = engineMutation.finally(() => {
+    camera.stop()
+    resetTracking()
+    arEngine.destroy()
+  })
 })
 </script>
 

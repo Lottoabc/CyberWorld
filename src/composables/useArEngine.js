@@ -17,6 +17,51 @@ export function createArEngine({
   const sceneRef = shallowRef(null)
   let containerRef = null
   let currentTargets = []
+  let sceneGlobalListeners = []
+
+  function captureSceneGlobalListeners() {
+    const eventTypes = new Set([
+      'resize',
+      'orientationchange',
+      'fullscreenchange',
+      'webkitfullscreenchange',
+      'vrdisplaypresentchange',
+      'vrdisplayactivate',
+      'vrdisplaydeactivate',
+    ])
+    const patchedTargets = [windowRef, documentRef].filter(Boolean)
+    const originals = patchedTargets.map((target) => ({
+      target,
+      addEventListener: target.addEventListener,
+    }))
+    const captured = []
+
+    originals.forEach(({ target, addEventListener }) => {
+      target.addEventListener = function addSceneEventListener(type, listener, options) {
+        if (eventTypes.has(type)) captured.push({ target, type, listener, options })
+        return addEventListener.call(this, type, listener, options)
+      }
+    })
+
+    let stopped = false
+    return {
+      stop() {
+        if (stopped) return
+        stopped = true
+        originals.forEach(({ target, addEventListener }) => {
+          target.addEventListener = addEventListener
+        })
+        sceneGlobalListeners.push(...captured)
+      },
+    }
+  }
+
+  function removeSceneGlobalListeners() {
+    for (const { target, type, listener, options } of sceneGlobalListeners) {
+      target.removeEventListener(type, listener, options)
+    }
+    sceneGlobalListeners = []
+  }
 
   function patchSystemLifecycle(system) {
     if (!system || system.__cyberworldPatched) return
@@ -181,13 +226,21 @@ export function createArEngine({
     const stagedUrl = lease.stage(buffer)
     const scene = buildScene(stagedUrl, currentTargets)
     sceneRef.value = scene
+    const listenerCapture = captureSceneGlobalListeners()
     const ready = startTracking(scene, true)
-    containerRef.replaceChildren(scene)
+    try {
+      containerRef.replaceChildren(scene)
+    } catch (error) {
+      listenerCapture.stop()
+      throw error
+    }
     try {
       await ready
+      listenerCapture.stop()
       lease.commit()
       return scene
     } catch (error) {
+      listenerCapture.stop()
       stopTracking(scene)
       scene.remove()
       sceneRef.value = null
@@ -250,6 +303,7 @@ export function createArEngine({
     containerRef = null
     currentTargets = []
     lease.dispose()
+    removeSceneGlobalListeners()
   }
 
   return {
