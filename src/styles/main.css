@@ -158,8 +158,8 @@ button {
 }
 
 .scanner__preview,
-.scanner__ar-mount,
-.scanner__ar-mount > a-scene {
+.ar-persistent-host,
+.ar-persistent-host > a-scene {
   position: absolute !important;
   inset: 0;
   width: 100% !important;
@@ -171,8 +171,13 @@ button {
   z-index: 0;
 }
 
-.scanner__ar-mount {
+.ar-persistent-host {
   z-index: 1;
+  pointer-events: none;
+}
+
+.ar-persistent-host[hidden] {
+  display: none !important;
 }
 
 .scanner__vignette {

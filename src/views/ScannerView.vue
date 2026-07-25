@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import EditorToolbar from '../components/EditorToolbar.vue'
 import MessageBoard from '../components/MessageBoard.vue'
 import { emojiTextureUrl } from '../components/TargetAnchor.js'
@@ -34,7 +34,7 @@ const arEngine = useArEngine()
 const projector = createCoordinateProjector()
 
 const previewVideo = ref(null)
-const arMount = ref(null)
+const arMount = inject('arHost', ref(null))
 const cameraReady = ref(false)
 const managerOpen = ref(false)
 const projectedPosition = ref(null)
@@ -492,7 +492,6 @@ onBeforeUnmount(() => {
 <template>
   <main class="scanner" aria-label="AR 扫描器">
     <video ref="previewVideo" class="scanner__preview" muted autoplay playsinline></video>
-    <div ref="arMount" class="scanner__ar-mount" aria-hidden="true"></div>
     <div class="scanner__vignette" aria-hidden="true"></div>
 
     <header class="scanner__header">

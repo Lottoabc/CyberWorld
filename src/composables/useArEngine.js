@@ -178,10 +178,13 @@ export function createArEngine({
     containerRef = container
 
     if (sceneRef.value && lease.activeUrl) {
+      if (sceneRef.value.parentNode !== containerRef) {
+        throw codedError('AR 永久挂载点已改变', 'AR_HOST_CHANGED')
+      }
       const previousTargets = currentTargets
       const previousUrl = lease.activeUrl
       const stagedUrl = lease.stage(buffer)
-      containerRef.replaceChildren(sceneRef.value)
+      containerRef.hidden = false
       try {
         currentTargets = [...targets]
         await restart(stagedUrl, currentTargets)
@@ -206,6 +209,7 @@ export function createArEngine({
     const scene = buildScene(stagedUrl, currentTargets)
     sceneRef.value = scene
     const ready = startTracking(scene, true)
+    containerRef.hidden = false
     containerRef.replaceChildren(scene)
     try {
       await ready
@@ -268,9 +272,7 @@ export function createArEngine({
   function park() {
     const scene = sceneRef.value
     stopTracking(scene)
-    scene?.remove()
-    containerRef?.replaceChildren()
-    containerRef = null
+    if (containerRef) containerRef.hidden = true
   }
 
   function destroy() {

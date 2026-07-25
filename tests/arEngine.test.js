@@ -55,9 +55,9 @@ describe('isolated AR engine', () => {
     engine.destroy()
   })
 
-  it('parks and reuses the same scene across route-like remounts', async () => {
+  it('parks and reuses one permanently connected scene across route visits', async () => {
     const container = document.createElement('div')
-    const nextContainer = document.createElement('div')
+    document.body.appendChild(container)
     const system = {
       start: vi.fn(),
       stop: vi.fn(),
@@ -80,11 +80,14 @@ describe('isolated AR engine', () => {
     await engine.mount(container, new ArrayBuffer(2), [{ id: 'a', emoji: '✨' }])
     const originalScene = engine.scene.value
     engine.park()
-    expect(container.children).toHaveLength(0)
+    expect(container.hidden).toBe(true)
+    expect(originalScene.isConnected).toBe(true)
 
-    await engine.mount(nextContainer, new ArrayBuffer(2), [{ id: 'b', emoji: '🎝' }])
+    await engine.mount(container, new ArrayBuffer(2), [{ id: 'b', emoji: '🎝' }])
     expect(engine.scene.value).toBe(originalScene)
-    expect(nextContainer.querySelectorAll('a-scene')).toHaveLength(1)
+    expect(container.hidden).toBe(false)
+    expect(container.querySelectorAll('a-scene')).toHaveLength(1)
     engine.destroy()
+    container.remove()
   })
 })
