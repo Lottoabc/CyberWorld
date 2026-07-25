@@ -4,7 +4,7 @@
 
 **Goal:** Build a complete browser-only WebAR experience that captures up to five local image targets, compiles and tracks them with MindAR, persists content locally, and deploys under GitHub Pages at `/CyberWorld/`.
 
-**Architecture:** Vue owns application UI and serializable Pinia state while an imperative AR adapter owns an isolated A-Frame DOM subtree. MindAR's official Compiler performs browser-side compilation, IndexedDB stores binary assets, and a controlled scene rebuild swaps compiled target sets without freezing the independent camera preview.
+**Architecture:** Vue owns application UI and serializable Pinia state while an imperative AR adapter owns an isolated A-Frame DOM subtree. MindAR's official Compiler performs browser-side compilation, IndexedDB stores binary assets, and a controlled scene rebuild swaps compiled target sets. Only one camera stream is active: the app owns it before the first target, and MindAR owns it while AR is active.
 
 **Tech Stack:** Vue 3 Composition API, Pinia, Vue Router hash history, Vite, Vitest, fake-indexeddb, MindAR 1.2.5 CDN build, A-Frame 1.5.0 CDN build, GitHub Actions/Pages.
 
@@ -303,6 +303,7 @@ git commit -m "feat: add target and message state"
 - Produces: `useCameraStream({ mediaDevices, documentRef })`.
 - Produces methods: `start(videoEl)`, `resume(videoEl)`, `captureFrame(videoEl)`, `stop()`.
 - `captureFrame` returns `Promise<Blob>` without calling `pause()` or replacing the preview source.
+- `start` is used only when no compiled AR targets exist; while AR is active, `captureFrame` receives the MindAR system's video element and no second stream is requested.
 
 - [ ] **Step 1: Write camera behavior tests**
 
@@ -519,6 +520,7 @@ persist candidate image
 load all committed images plus candidate
 compile ordered images
 persist new .mind buffer
+stop the app-owned preview stream when adding the first target
 swap AR scene
 commit candidate metadata and local state
 ```
@@ -527,7 +529,7 @@ On any failure before swap commit, remove the candidate image and restore the pr
 
 - [ ] **Step 4: Implement target deletion transaction**
 
-If targets remain, compile the remaining ordered images, persist, swap, then delete the removed image and metadata. If none remain, destroy the AR scene, delete compiled data, retain the camera preview, and clear the removed target's messages.
+If targets remain, compile the remaining ordered images, persist, swap, then delete the removed image and metadata. If none remain, destroy the AR scene, delete compiled data, start the app-owned preview stream, and clear the removed target's messages.
 
 - [ ] **Step 5: Implement UI components and responsive styling**
 
