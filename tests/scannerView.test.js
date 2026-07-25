@@ -36,7 +36,7 @@ describe('scanner view', () => {
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled()
     await wrapper.get('[data-test="start-scanning"]').trigger('click')
 
-    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledOnce())
     wrapper.unmount()
   })
 
