@@ -21,10 +21,10 @@ const router = useRouter()
         <li>最多保存 5 个本地参照物</li>
       </ul>
       <button class="primary-button" type="button" @click="router.push('/scan')">
-        开始扫描
+        进入 CyberWorld
         <span aria-hidden="true">↗</span>
       </button>
-      <p class="welcome__permission">下一步才会请求摄像头权限</p>
+      <p class="welcome__permission">进入扫描器后才会请求摄像头权限</p>
     </section>
   </main>
 </template>
