@@ -85,9 +85,10 @@ export function createArEngine({
   async function activate(url, targets) {
     const scene = buildScene(url, targets)
     sceneRef.value = scene
+    const ready = sceneStarter(scene)
     containerRef.replaceChildren(scene)
     try {
-      await sceneStarter(scene)
+      await ready
       return scene
     } catch (error) {
       stopScene(scene)

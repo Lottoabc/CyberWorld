@@ -121,11 +121,10 @@ export default defineConfig({
 
 - [ ] **Step 2: Create the root HTML with pinned AR scripts**
 
-Place A-Frame before both MindAR bundles and load all three before Vite's module entry. The core image bundle exposes `window.MINDAR.IMAGE.Compiler`; the A-Frame bundle registers the scene system and target component:
+Place A-Frame before the MindAR A-Frame bundle and load both before Vite's module entry. MindAR's A-Frame bundle imports the image-target index, which exposes `window.MINDAR.IMAGE.Compiler`, and registers the scene system and target component:
 
 ```html
 <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image.prod.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
 <script type="module" src="/src/main.js"></script>
 ```

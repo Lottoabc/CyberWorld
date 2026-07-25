@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import EditorToolbar from '../components/EditorToolbar.vue'
 import MessageBoard from '../components/MessageBoard.vue'
+import { emojiTextureUrl } from '../components/TargetAnchor.js'
 import ToastHost from '../components/ToastHost.vue'
 import TransitionOverlay from '../components/TransitionOverlay.vue'
 import { createArEngine } from '../composables/useArEngine.js'
@@ -304,7 +305,7 @@ function setEmoji(emoji) {
   if (!activeTarget.value) return
   messageStore.setEmoji(activeTarget.value.id, emoji)
   const anchor = arEngine.getAnchor(activeTarget.value.id)
-  anchor?.querySelector('a-text')?.setAttribute('value', emoji)
+  anchor?.querySelector('a-image')?.setAttribute('src', emojiTextureUrl(emoji))
   persistMetadata()
 }
 
