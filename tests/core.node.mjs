@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import 'fake-indexeddb/auto'
 import { createPinia, setActivePinia } from 'pinia'
+import { createCameraStream } from '../src/composables/useCameraStream.js'
+import { createTargetCompiler } from '../src/composables/useTargetCompiler.js'
 import { createEmptyState, loadLocalState, saveLocalState } from '../src/persistence/localState.js'
 import { deleteImage, getImage, getMindBuffer, putImage, putMindBuffer } from '../src/persistence/indexedDb.js'
 import { useMessageStore } from '../src/stores/messages.js'
@@ -42,4 +44,47 @@ test('registry and stores preserve stable target identity', () => {
   assert.equal(registry.indexFor('c'), 1)
   assert.equal(messages.messagesFor('c')[0].text, 'hello')
   assert.equal(messages.messagesFor('a').length, 0)
+})
+
+test('camera frame capture does not pause the live video', async () => {
+  let paused = false
+  const canvas = {
+    getContext: () => ({ drawImage() {} }),
+    toBlob: (callback) => callback(new Blob(['jpeg'], { type: 'image/jpeg' })),
+  }
+  const camera = createCameraStream({ documentRef: { createElement: () => canvas } })
+  const blob = await camera.captureFrame({
+    videoWidth: 1920,
+    videoHeight: 1080,
+    pause: () => { paused = true },
+  })
+  assert.equal(blob.type, 'image/jpeg')
+  assert.equal(paused, false)
+  assert.equal(canvas.width, 1280)
+  assert.equal(canvas.height, 720)
+})
+
+test('target compiler preserves order and releases decoded images', async () => {
+  const released = []
+  class Compiler {
+    async compileImageTargets(images, progress) {
+      assert.deepEqual(images.map((item) => item.label), ['a', 'b'])
+      progress(51)
+    }
+    async exportData() {
+      return new Uint8Array([9, 4]).buffer
+    }
+  }
+  const progress = []
+  const compiler = createTargetCompiler({
+    CompilerClass: Compiler,
+    decodeBlob: async (blob) => ({
+      label: await blob.text(),
+      close: () => released.push(blob),
+    }),
+  })
+  const result = await compiler.compile([new Blob(['a']), new Blob(['b'])], (value) => progress.push(value))
+  assert.deepEqual([...new Uint8Array(result)], [9, 4])
+  assert.deepEqual(progress, [51])
+  assert.equal(released.length, 2)
 })
