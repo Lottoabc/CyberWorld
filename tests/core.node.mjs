@@ -4,11 +4,13 @@ import 'fake-indexeddb/auto'
 import { createPinia, setActivePinia } from 'pinia'
 import { createCameraStream } from '../src/composables/useCameraStream.js'
 import { createTargetCompiler } from '../src/composables/useTargetCompiler.js'
+import { createCoordinateProjector } from '../src/composables/useCoordinateProjector.js'
 import { createEmptyState, loadLocalState, saveLocalState } from '../src/persistence/localState.js'
 import { deleteImage, getImage, getMindBuffer, putImage, putMindBuffer } from '../src/persistence/indexedDb.js'
 import { useMessageStore } from '../src/stores/messages.js'
 import { useTargetStore } from '../src/stores/targets.js'
 import { createTargetRegistry } from '../src/utils/targetRegistry.js'
+import { createBlobUrlLease } from '../src/utils/blobUrlLease.js'
 
 test('metadata round-trips and malformed data falls back', () => {
   const values = new Map()
@@ -87,4 +89,41 @@ test('target compiler preserves order and releases decoded images', async () => 
   assert.deepEqual([...new Uint8Array(result)], [9, 4])
   assert.deepEqual(progress, [51])
   assert.equal(released.length, 2)
+})
+
+test('Blob URL swap revokes only URLs that are no longer active', () => {
+  const revoked = []
+  let id = 0
+  const lease = createBlobUrlLease({
+    createObjectURL: () => `blob:${++id}`,
+    revokeObjectURL: (url) => revoked.push(url),
+  })
+  lease.stage(new ArrayBuffer(1))
+  lease.commit()
+  lease.stage(new ArrayBuffer(1))
+  assert.deepEqual(revoked, [])
+  lease.commit()
+  assert.deepEqual(revoked, ['blob:1'])
+  lease.dispose()
+  assert.deepEqual(revoked, ['blob:1', 'blob:2'])
+})
+
+test('coordinate projection smooths the latest five frames', () => {
+  const vector = { x: 0, y: 0, z: 0, project() { return this } }
+  const projector = createCoordinateProjector({
+    viewport: () => ({ width: 100, height: 100 }),
+    vectorFactory: () => vector,
+  })
+  const target = {
+    visible: true,
+    getWorldPosition(value) {
+      value.x += 0.2
+      value.y = 0
+      value.z = 0
+    },
+  }
+  let point
+  for (let index = 0; index < 5; index += 1) point = projector.project(target, {})
+  assert.equal(Math.round(point.x), 80)
+  assert.equal(Math.round(point.y), 50)
 })
