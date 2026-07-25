@@ -47,13 +47,24 @@ export function createArEngine({
       const originalStartAR = system._startAR.bind(system)
       system._startAR = (...args) => {
         const originalAdd = windowRef.addEventListener
-        const mediaDevices = windowRef.navigator?.mediaDevices
-        const originalGetUserMedia = mediaDevices?.getUserMedia
-        const generation = operationGeneration
         windowRef.addEventListener = function addEventListener(type, listener, options) {
           if (type === 'resize') resizeListeners.push({ listener, options })
           return originalAdd.call(this, type, listener, options)
         }
+        try {
+          return originalStartAR(...args)
+        } finally {
+          windowRef.addEventListener = originalAdd
+        }
+      }
+    }
+
+    if (typeof system._startVideo === 'function') {
+      const originalStartVideo = system._startVideo.bind(system)
+      system._startVideo = (...args) => {
+        const mediaDevices = windowRef.navigator?.mediaDevices
+        const originalGetUserMedia = mediaDevices?.getUserMedia
+        const generation = operationGeneration
         if (originalGetUserMedia) {
           mediaDevices.getUserMedia = function trackedGetUserMedia(...mediaArgs) {
             return Promise.resolve(originalGetUserMedia.apply(this, mediaArgs)).then((stream) => {
@@ -67,9 +78,8 @@ export function createArEngine({
           }
         }
         try {
-          return originalStartAR(...args)
+          return originalStartVideo(...args)
         } finally {
-          windowRef.addEventListener = originalAdd
           if (originalGetUserMedia) mediaDevices.getUserMedia = originalGetUserMedia
         }
       }

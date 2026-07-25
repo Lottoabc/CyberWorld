@@ -142,11 +142,13 @@ describe('isolated AR engine', () => {
     const system = {
       video,
       controller: null,
-      _startAR: async function startAR() {
+      _startVideo: async function startVideo() {
         video.srcObject = await navigator.mediaDevices.getUserMedia({ video: true })
+        await this._startAR()
       },
+      _startAR: vi.fn(),
       start() {
-        return this._startAR()
+        return this._startVideo()
       },
       stop() {
         if (!this.controller || !this.video.srcObject) throw new Error('partially initialized')
