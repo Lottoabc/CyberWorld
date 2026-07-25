@@ -19,6 +19,21 @@ export function createArEngine({
   let currentTargets = []
   let operationGeneration = 0
   const pendingStartCancels = new Set()
+  const ownedMediaStreams = new Set()
+
+  function stopMediaStream(stream) {
+    for (const track of stream?.getTracks?.() ?? []) track.stop()
+    ownedMediaStreams.delete(stream)
+  }
+
+  function stopOwnedMediaStreams(scene = sceneRef.value) {
+    for (const stream of [...ownedMediaStreams]) stopMediaStream(stream)
+    const video = scene?.systems?.['mindar-image-system']?.video
+    if (video?.srcObject) {
+      stopMediaStream(video.srcObject)
+      video.srcObject = null
+    }
+  }
 
   function patchSystemLifecycle(system) {
     if (!system || system.__cyberworldPatched) return
@@ -32,14 +47,30 @@ export function createArEngine({
       const originalStartAR = system._startAR.bind(system)
       system._startAR = (...args) => {
         const originalAdd = windowRef.addEventListener
+        const mediaDevices = windowRef.navigator?.mediaDevices
+        const originalGetUserMedia = mediaDevices?.getUserMedia
+        const generation = operationGeneration
         windowRef.addEventListener = function addEventListener(type, listener, options) {
           if (type === 'resize') resizeListeners.push({ listener, options })
           return originalAdd.call(this, type, listener, options)
+        }
+        if (originalGetUserMedia) {
+          mediaDevices.getUserMedia = function trackedGetUserMedia(...mediaArgs) {
+            return Promise.resolve(originalGetUserMedia.apply(this, mediaArgs)).then((stream) => {
+              if (generation !== operationGeneration) {
+                stopMediaStream(stream)
+                return new Promise(() => {})
+              }
+              ownedMediaStreams.add(stream)
+              return stream
+            })
+          }
         }
         try {
           return originalStartAR(...args)
         } finally {
           windowRef.addEventListener = originalAdd
+          if (originalGetUserMedia) mediaDevices.getUserMedia = originalGetUserMedia
         }
       }
     }
@@ -178,6 +209,8 @@ export function createArEngine({
       scene.systems?.['mindar-image-system']?.stop()
     } catch {
       // A partially initialized system may not own a video or controller yet.
+    } finally {
+      stopOwnedMediaStreams(scene)
     }
   }
 

@@ -107,7 +107,8 @@ describe('isolated AR engine', () => {
 
   it('cancels a pending MindAR readiness wait when parked', async () => {
     const container = document.createElement('div')
-    const system = { start: vi.fn(), stop: vi.fn() }
+    const stop = vi.fn()
+    const system = { start: vi.fn(), stop }
     const engine = createArEngine({
       urlApi: {
         createObjectURL: vi.fn(() => 'blob:test'),
@@ -122,7 +123,56 @@ describe('isolated AR engine', () => {
     engine.park()
 
     await expect(mounting).rejects.toMatchObject({ code: 'AR_OPERATION_CANCELLED' })
-    expect(system.stop).toHaveBeenCalledOnce()
+    expect(stop).toHaveBeenCalledOnce()
+    engine.destroy()
+  })
+
+  it('stops a camera stream that resolves after the scene was parked', async () => {
+    const container = document.createElement('div')
+    let resolveCamera
+    const stopTrack = vi.fn()
+    const getUserMedia = vi.fn(() => new Promise((resolve) => {
+      resolveCamera = resolve
+    }))
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia },
+    })
+    const video = { srcObject: null }
+    const system = {
+      video,
+      controller: null,
+      _startAR: async function startAR() {
+        video.srcObject = await navigator.mediaDevices.getUserMedia({ video: true })
+      },
+      start() {
+        return this._startAR()
+      },
+      stop() {
+        if (!this.controller || !this.video.srcObject) throw new Error('partially initialized')
+      },
+    }
+    const engine = createArEngine({
+      urlApi: {
+        createObjectURL: vi.fn(() => 'blob:test'),
+        revokeObjectURL: vi.fn(),
+      },
+    })
+
+    const mounting = engine.mount(container, new ArrayBuffer(2), [{ id: 'a', emoji: '✨' }])
+    const scene = container.querySelector('a-scene')
+    scene.systems = { 'mindar-image-system': system }
+    scene.dispatchEvent(new Event('renderstart'))
+    expect(getUserMedia).toHaveBeenCalledOnce()
+
+    engine.park()
+    resolveCamera({ getTracks: () => [{ stop: stopTrack }] })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    await expect(mounting).rejects.toMatchObject({ code: 'AR_OPERATION_CANCELLED' })
+    expect(stopTrack).toHaveBeenCalledOnce()
+    expect(video.srcObject).toBeNull()
     engine.destroy()
   })
 })
