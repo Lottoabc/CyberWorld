@@ -30,16 +30,16 @@
 
 ### AR 更新
 
-MindAR A-Frame system 没有稳定公开的运行时 `hotSwap` API。应用采用“受控重建式热更新”：
+MindAR A-Frame system 没有稳定公开的运行时 `hotSwap` API。应用采用“单场景受控重启式热更新”：
 
 1. 新编译结果成功持久化后创建新 Blob URL。
 2. 显示短暂过渡蒙版；停止当前唯一摄像头流，避免移动端双流抢占。
-3. 停止并销毁旧 MindAR/A-Frame 场景。
-4. 使用新 Blob URL 和最新目标索引重建原生 A-Frame DOM。
-5. 等待新场景发出 `arReady`。
+3. 保留唯一 A-Frame 场景，停止 MindAR system 并清理其目标与 resize 监听器。
+4. 使用新 Blob URL 重新配置 system，只重建 target 节点。
+5. 等待 system 再次发出 `arReady`。
 6. 隐藏过渡蒙版并回收旧 Blob URL。
 
-若新场景启动失败，应用使用最后一次成功的 `.mind` 数据回滚。Blob URL 只有在不再被任何场景引用后才会调用 `URL.revokeObjectURL`。
+若新 system 启动失败，应用在同一场景中使用最后一次成功的 `.mind` 数据回滚。Blob URL 只有在不再被 system 引用后才会调用 `URL.revokeObjectURL`。
 
 ## 架构
 
@@ -58,7 +58,7 @@ A-Frame 场景由 `useArEngine` 在 Vue 管理范围之外的原生挂载容器�
 
 - `useCameraStream`：在尚无 AR 目标时请求后置摄像头并维护预览；存在 AR 目标时改为读取 MindAR 的视频元素；负责恢复 iOS 播放、复制当前帧以及释放应用自有轨道。
 - `useTargetCompiler`：加载 MindAR Compiler、顺序编译全部图片、报告进度并导出 ArrayBuffer。
-- `useArEngine`：创建、启动、暂停、恢复、重建和销毁 AR 场景；管理 Blob URL 生命周期。
+- `useArEngine`：创建和销毁唯一 AR 场景，启动、暂停、恢复及重启 MindAR system；管理 Blob URL 与全局监听器生命周期。
 - `useTargetRegistry`：把稳定目标 ID 映射到当前 `.mind` 文件的 `targetIndex`。
 - `useCoordinateProjector`：从 target entity 读取世界坐标，投影到二维屏幕坐标，以最近五帧平均值平滑位置。
 - `usePersistence`：封装 localStorage 和 IndexedDB，并处理 schema 版本。
@@ -109,7 +109,7 @@ A-Frame 场景由 `useArEngine` 在 Vue 管理范围之外的原生挂载容器�
 5. 用户点击拍照后，应用从当前唯一视频元素复制帧，视频不暂停。
 6. 应用立即显示“参照物已设定”Toast，并开始压缩、持久化及重新编译。
 7. 编译期间当前视频预览、留言查看和目标管理保持可用；拍照按钮暂时禁用以阻止并发编译。
-8. 编译成功后执行受控重建式热更新。
+8. 编译成功后在单一 A-Frame 场景内执行 MindAR system 受控重启式热更新。
 9. MindAR 识别目标时显示 emoji，并将目标的三维坐标投影给留言板。
 10. 目标丢失时留言板平滑隐藏。
 

@@ -8,6 +8,7 @@ describe('mobile lifecycle recovery', () => {
     const pause = vi.fn()
     const resume = vi.fn().mockResolvedValue(false)
     const recovery = createLifecycleRecovery({ documentRef, pause, resume })
+    recovery.attach(null)
     documentRef.dispatchEvent(new Event('visibilitychange'))
     expect(pause).toHaveBeenCalledOnce()
     documentRef.visibilityState = 'visible'

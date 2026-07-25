@@ -6,6 +6,10 @@ describe('isolated AR engine', () => {
     const container = document.createElement('div')
     const stop = vi.fn()
     const engine = createArEngine({
+      urlApi: {
+        createObjectURL: vi.fn(() => 'blob:test'),
+        revokeObjectURL: vi.fn(),
+      },
       sceneStarter: async (scene) => {
         scene.systems = { 'mindar-image-system': { start: vi.fn(), stop, video: document.createElement('video') } }
       },
@@ -19,5 +23,35 @@ describe('isolated AR engine', () => {
     engine.destroy()
     expect(container.children).toHaveLength(0)
     expect(stop).toHaveBeenCalledOnce()
+  })
+
+  it('reuses the same A-Frame scene while replacing MindAR targets', async () => {
+    const container = document.createElement('div')
+    const system = {
+      start: vi.fn(),
+      stop: vi.fn(),
+      setup: vi.fn(),
+      anchorEntities: [],
+      video: document.createElement('video'),
+    }
+    const engine = createArEngine({
+      urlApi: {
+        createObjectURL: vi.fn()
+          .mockReturnValueOnce('blob:first')
+          .mockReturnValueOnce('blob:second'),
+        revokeObjectURL: vi.fn(),
+      },
+      sceneStarter: async (scene) => {
+        scene.systems ??= { 'mindar-image-system': system }
+      },
+    })
+    await engine.mount(container, new ArrayBuffer(2), [{ id: 'a', emoji: '✨' }])
+    const originalScene = engine.scene.value
+    await engine.swap(new ArrayBuffer(2), [{ id: 'b', emoji: '🪐' }])
+    expect(engine.scene.value).toBe(originalScene)
+    expect(container.querySelectorAll('a-scene')).toHaveLength(1)
+    expect(container.querySelector('[data-target-id]').dataset.targetId).toBe('b')
+    expect(system.stop).toHaveBeenCalledOnce()
+    engine.destroy()
   })
 })

@@ -13,10 +13,12 @@ import { createTargetCompiler } from '../composables/useTargetCompiler.js'
 import {
   deleteImage,
   deleteMindBuffer,
+  getCompiledTargetIds,
   getImage,
   getMindBuffer,
+  isSessionOnlyPersistence,
+  putCompiledState,
   putImage,
-  putMindBuffer,
 } from '../persistence/indexedDb.js'
 import { loadLocalState, saveLocalState } from '../persistence/localState.js'
 import { useMessageStore } from '../stores/messages.js'
@@ -47,6 +49,15 @@ const overlay = reactive({
 
 let toastSerial = 0
 let projectionFrame = 0
+let storageWarningShown = false
+let engineMutation = Promise.resolve()
+const toastTimers = new Set()
+
+function mutateEngine(operation) {
+  const result = engineMutation.then(operation, operation)
+  engineMutation = result.catch(() => {})
+  return result
+}
 
 const lifecycle = createLifecycleRecovery({
   pause() {
@@ -65,7 +76,8 @@ const lifecycle = createLifecycleRecovery({
     const buffer = await getMindBuffer()
     if (!buffer) throw new Error('找不到已编译的 AR 数据')
     setOverlay({ visible: true, title: '正在恢复画面', detail: 'WebGL 已重置，正在重建追踪引擎。' })
-    await arEngine.swap(buffer, targetStore.targets)
+    resetTracking()
+    await mutateEngine(() => arEngine.swap(buffer, targetStore.targets))
     bindTargetEvents(targetStore.targets)
     attachRecoveryCanvas()
     setOverlay({ visible: false })
@@ -79,14 +91,16 @@ const activeMessages = computed(() =>
   activeTarget.value ? messageStore.messagesFor(activeTarget.value.id) : [],
 )
 
-function persistMetadata() {
+function persistMetadata(targets = targetStore.targets, messages = messageStore.messages, required = false) {
   try {
-    saveLocalState(localStorage, {
-      targets: targetStore.targets,
-      messages: messageStore.messages,
-    })
+    saveLocalState(localStorage, { targets, messages })
     return true
-  } catch {
+  } catch (error) {
+    if (required) {
+      throw Object.assign(new Error('本地元数据保存失败，请检查浏览器存储空间', { cause: error }), {
+        code: 'METADATA_SAVE_FAILED',
+      })
+    }
     showToast('本地设置保存失败，请检查浏览器存储空间', '!')
     return false
   }
@@ -95,9 +109,24 @@ function persistMetadata() {
 function showToast(text, icon = '✓') {
   const id = ++toastSerial
   toasts.value.push({ id, text, icon })
-  setTimeout(() => {
+  const timer = setTimeout(() => {
     toasts.value = toasts.value.filter((item) => item.id !== id)
+    toastTimers.delete(timer)
   }, 2600)
+  toastTimers.add(timer)
+}
+
+function warnSessionStorage() {
+  if (!storageWarningShown && isSessionOnlyPersistence()) {
+    storageWarningShown = true
+    showToast('浏览器存储不可用，本次内容将在刷新后消失', '!')
+  }
+}
+
+function resetTracking() {
+  targetStore.setActiveTarget(null)
+  projectedPosition.value = null
+  projector.reset()
 }
 
 function setOverlay({ visible, title = '', detail = '', actionLabel = '', error = false }) {
@@ -149,9 +178,30 @@ function updateProjection() {
         x: Math.max(24, Math.min(innerWidth - 24, point.x)),
         y: Math.max(120, Math.min(innerHeight - 150, point.y)),
       }
+    } else {
+      projectedPosition.value = null
     }
   }
   projectionFrame = requestAnimationFrame(updateProjection)
+}
+
+async function reconcileCompiledManifest() {
+  const targetIds = await getCompiledTargetIds()
+  warnSessionStorage()
+  if (!Array.isArray(targetIds)) return
+  const currentById = new Map(targetStore.targets.map((target) => [target.id, target]))
+  const reconciled = targetIds.map((id, index) => currentById.get(id) ?? {
+    id,
+    imageKey: id,
+    name: `已恢复参照物 ${index + 1}`,
+    emoji: '✨',
+    createdAt: new Date().toISOString(),
+  })
+  if (reconciled.map((target) => target.id).join('|') !== targetStore.targets.map((target) => target.id).join('|')) {
+    targetStore.hydrate(reconciled)
+    messageStore.hydrate(messageStore.messages.filter((message) => targetIds.includes(message.targetId)))
+    persistMetadata(reconciled, messageStore.messages)
+  }
 }
 
 async function mountExistingTargets() {
@@ -160,10 +210,12 @@ async function mountExistingTargets() {
     targetStore.beginCompile()
     const blobs = await loadImages(targetStore.targets)
     buffer = await compiler.compile(blobs, targetStore.setCompileProgress)
-    await putMindBuffer(buffer)
+    await putCompiledState(buffer, targetStore.targets.map((target) => target.id))
+    warnSessionStorage()
     targetStore.finishCompile()
   }
-  await arEngine.mount(arMount.value, buffer, targetStore.targets)
+  resetTracking()
+  await mutateEngine(() => arEngine.mount(arMount.value, buffer, targetStore.targets))
   bindTargetEvents(targetStore.targets)
   attachRecoveryCanvas()
 }
@@ -175,6 +227,7 @@ async function startScanning() {
     detail: '请允许使用后置摄像头。',
   })
   try {
+    await reconcileCompiledManifest()
     if (targetStore.targets.length > 0) {
       await mountExistingTargets()
     } else {
@@ -184,7 +237,7 @@ async function startScanning() {
     setOverlay({ visible: false })
   } catch (error) {
     targetStore.failCompile(error)
-    const denied = error?.code === 'CAMERA_DENIED'
+    const denied = ['CAMERA_DENIED', 'AR_START_FAILED'].includes(error?.code)
     setOverlay({
       visible: true,
       title: denied ? '需要摄像头权限' : '扫描器未能启动',
@@ -199,6 +252,8 @@ async function captureTarget() {
   if (!cameraReady.value || targetStore.isCompiling || targetStore.targets.length >= 5) return
   let candidate = null
   let oldBuffer = null
+  let oldTargetIds = targetStore.targets.map((target) => target.id)
+  let sceneUpdated = false
   try {
     targetStore.beginCompile()
     const sourceVideo = targetStore.targets.length > 0 ? arEngine.getVideoElement() : previewVideo.value
@@ -215,7 +270,9 @@ async function captureTarget() {
     const blobs = await loadImages(nextTargets)
     const buffer = await compiler.compile(blobs, targetStore.setCompileProgress)
     oldBuffer = await getMindBuffer()
-    await putMindBuffer(buffer)
+    oldTargetIds = await getCompiledTargetIds() ?? oldTargetIds
+    await putCompiledState(buffer, nextTargets.map((target) => target.id))
+    warnSessionStorage()
     targetStore.beginSwap()
 
     setOverlay({
@@ -226,19 +283,33 @@ async function captureTarget() {
     if (targetStore.targets.length === 0) {
       camera.stop()
       previewVideo.value.srcObject = null
-      await arEngine.mount(arMount.value, buffer, nextTargets)
+      resetTracking()
+      await mutateEngine(() => arEngine.mount(arMount.value, buffer, nextTargets))
     } else {
-      await arEngine.swap(buffer, nextTargets)
+      resetTracking()
+      await mutateEngine(() => arEngine.swap(buffer, nextTargets))
     }
+    sceneUpdated = true
+    persistMetadata(nextTargets, messageStore.messages, true)
     targetStore.commitCandidate(candidate)
-    persistMetadata()
     bindTargetEvents(nextTargets)
     attachRecoveryCanvas()
     setOverlay({ visible: false })
     showToast('新参照物已可识别', '✦')
   } catch (error) {
+    if (oldBuffer) await putCompiledState(oldBuffer, oldTargetIds).catch(() => {})
+    else await deleteMindBuffer().catch(() => {})
+    if (sceneUpdated) {
+      resetTracking()
+      if (oldBuffer && targetStore.targets.length > 0) {
+        await mutateEngine(() => arEngine.swap(oldBuffer, targetStore.targets)).catch(() => {})
+        bindTargetEvents(targetStore.targets)
+        attachRecoveryCanvas()
+      } else {
+        await mutateEngine(async () => arEngine.destroy()).catch(() => {})
+      }
+    }
     if (candidate) await deleteImage(candidate.imageKey).catch(() => {})
-    if (oldBuffer) await putMindBuffer(oldBuffer).catch(() => {})
     targetStore.failCompile(error)
     if (targetStore.targets.length === 0 && !camera.stream.value) {
       await camera.start(previewVideo.value).catch(() => {})
@@ -251,35 +322,48 @@ async function captureTarget() {
 async function removeTarget(target) {
   if (targetStore.isCompiling) return
   const remaining = targetStore.targets.filter((item) => item.id !== target.id)
+  const remainingMessages = messageStore.messages.filter((message) => message.targetId !== target.id)
   const oldBuffer = await getMindBuffer().catch(() => null)
+  const oldTargetIds = await getCompiledTargetIds().catch(() => targetStore.targets.map((item) => item.id))
+  let sceneUpdated = false
   try {
     targetStore.beginCompile()
     if (remaining.length === 0) {
-      arEngine.destroy()
       await deleteMindBuffer()
-      targetStore.removeTarget(target.id)
-      messageStore.removeForTarget(target.id)
-      await deleteImage(target.imageKey).catch(() => {})
+      resetTracking()
+      await mutateEngine(async () => arEngine.destroy())
+      sceneUpdated = true
       await camera.start(previewVideo.value)
     } else {
       const blobs = await loadImages(remaining)
       const buffer = await compiler.compile(blobs, targetStore.setCompileProgress)
-      await putMindBuffer(buffer)
+      await putCompiledState(buffer, remaining.map((item) => item.id))
+      warnSessionStorage()
       targetStore.beginSwap()
       setOverlay({ visible: true, title: '正在整理目标', detail: '重新建立追踪索引。' })
-      await arEngine.swap(buffer, remaining)
-      targetStore.removeTarget(target.id)
-      messageStore.removeForTarget(target.id)
-      await deleteImage(target.imageKey).catch(() => {})
+      resetTracking()
+      await mutateEngine(() => arEngine.swap(buffer, remaining))
+      sceneUpdated = true
       bindTargetEvents(remaining)
       attachRecoveryCanvas()
     }
+    persistMetadata(remaining, remainingMessages, true)
+    targetStore.removeTarget(target.id)
+    messageStore.removeForTarget(target.id)
+    await deleteImage(target.imageKey).catch(() => {})
     targetStore.finishCompile()
-    persistMetadata()
     setOverlay({ visible: false })
     showToast('参照物已删除')
   } catch (error) {
-    if (oldBuffer) await putMindBuffer(oldBuffer).catch(() => {})
+    if (oldBuffer) await putCompiledState(oldBuffer, oldTargetIds ?? targetStore.targets.map((item) => item.id)).catch(() => {})
+    if (sceneUpdated && oldBuffer) {
+      camera.stop()
+      resetTracking()
+      if (arEngine.scene.value) await mutateEngine(() => arEngine.swap(oldBuffer, targetStore.targets)).catch(() => {})
+      else await mutateEngine(() => arEngine.mount(arMount.value, oldBuffer, targetStore.targets)).catch(() => {})
+      bindTargetEvents(targetStore.targets)
+      attachRecoveryCanvas()
+    }
     targetStore.failCompile(error)
     setOverlay({ visible: false })
     showToast(error.message || '删除失败', '!')
@@ -310,6 +394,10 @@ function setEmoji(emoji) {
 }
 
 async function handleOverlayAction() {
+  if (lifecycle.lastError.value) {
+    lifecycle.retryRecovery()
+    return
+  }
   if (lifecycle.needsUserResume.value) {
     const resumed = await lifecycle.resumeFromGesture()
     if (resumed) setOverlay({ visible: false })
@@ -329,6 +417,18 @@ watch(lifecycle.needsUserResume, (needed) => {
   }
 })
 
+watch(lifecycle.lastError, (error) => {
+  if (error) {
+    setOverlay({
+      visible: true,
+      title: '画面恢复失败',
+      detail: error.message || '无法恢复 AR 画面，请重试。',
+      actionLabel: '重试恢复',
+      error: true,
+    })
+  }
+})
+
 onMounted(() => {
   const state = loadLocalState()
   targetStore.hydrate(state.targets)
@@ -340,7 +440,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   cancelAnimationFrame(projectionFrame)
   lifecycle.detach()
+  toastTimers.forEach((timer) => clearTimeout(timer))
+  toastTimers.clear()
   camera.stop()
+  resetTracking()
   arEngine.destroy()
 })
 </script>

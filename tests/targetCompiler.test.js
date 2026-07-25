@@ -3,7 +3,7 @@ import { createTargetCompiler } from '../src/composables/useTargetCompiler.js'
 
 class FakeCompiler {
   async compileImageTargets(images, progress) {
-    this.images = images
+    FakeCompiler.images = images
     progress(12.4)
     progress(98.6)
   }
@@ -16,13 +16,16 @@ class FakeCompiler {
 describe('target compiler', () => {
   it('preserves image order, reports progress, and closes decoded images', async () => {
     const closed = []
-    const decodeBlob = vi.fn(async (blob) => ({ source: await blob.text(), close: () => closed.push(blob) }))
+    const decodeBlob = vi.fn(async (blob) => ({ source: blob.label, close: () => closed.push(blob) }))
     const compiler = createTargetCompiler({ CompilerClass: FakeCompiler, decodeBlob })
     const progress = []
+    const first = { label: 'a' }
+    const second = { label: 'b' }
 
-    const result = await compiler.compile([new Blob(['a']), new Blob(['b'])], (value) => progress.push(value))
+    const result = await compiler.compile([first, second], (value) => progress.push(value))
 
     expect([...new Uint8Array(result)]).toEqual([7, 8, 9])
+    expect(FakeCompiler.images.map((image) => image.source)).toEqual(['a', 'b'])
     expect(decodeBlob).toHaveBeenCalledTimes(2)
     expect(progress).toEqual([12, 99])
     expect(closed).toHaveLength(2)

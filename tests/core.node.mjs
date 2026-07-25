@@ -7,7 +7,15 @@ import { createTargetCompiler } from '../src/composables/useTargetCompiler.js'
 import { createCoordinateProjector } from '../src/composables/useCoordinateProjector.js'
 import { createLifecycleRecovery } from '../src/composables/useLifecycleRecovery.js'
 import { createEmptyState, loadLocalState, saveLocalState } from '../src/persistence/localState.js'
-import { deleteImage, getImage, getMindBuffer, putImage, putMindBuffer } from '../src/persistence/indexedDb.js'
+import {
+  deleteImage,
+  getCompiledTargetIds,
+  getImage,
+  getMindBuffer,
+  putCompiledState,
+  putImage,
+  putMindBuffer,
+} from '../src/persistence/indexedDb.js'
 import { useMessageStore } from '../src/stores/messages.js'
 import { useTargetStore } from '../src/stores/targets.js'
 import { createTargetRegistry } from '../src/utils/targetRegistry.js'
@@ -34,6 +42,8 @@ test('binary data round-trips through IndexedDB', async () => {
   assert.equal(await getImage('a'), null)
   await putMindBuffer(new Uint8Array([1, 2, 3]).buffer)
   assert.deepEqual([...new Uint8Array(await getMindBuffer())], [1, 2, 3])
+  await putCompiledState(new Uint8Array([7]).buffer, ['c', 'a'])
+  assert.deepEqual(await getCompiledTargetIds(), ['c', 'a'])
 })
 
 test('registry and stores preserve stable target identity', () => {

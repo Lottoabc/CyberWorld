@@ -3,6 +3,17 @@ import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import ScannerView from '../src/views/ScannerView.vue'
 
+function mountOptions() {
+  return {
+    global: {
+      plugins: [createPinia()],
+      stubs: {
+        RouterLink: { template: '<a><slot /></a>' },
+      },
+    },
+  }
+}
+
 describe('scanner view', () => {
   beforeEach(() => {
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
@@ -18,7 +29,7 @@ describe('scanner view', () => {
 
   it('does not request the camera until the user starts scanning', async () => {
     const wrapper = mount(ScannerView, {
-      global: { plugins: [createPinia()] },
+      ...mountOptions(),
       attachTo: document.body,
     })
 
@@ -30,7 +41,7 @@ describe('scanner view', () => {
   })
 
   it('keeps the capture control visible in the scanner shell', () => {
-    const wrapper = mount(ScannerView, { global: { plugins: [createPinia()] } })
+    const wrapper = mount(ScannerView, mountOptions())
     expect(wrapper.get('[data-test="capture"]').exists()).toBe(true)
   })
 })

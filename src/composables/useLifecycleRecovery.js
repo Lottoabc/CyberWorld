@@ -8,12 +8,24 @@ export function createLifecycleRecovery({
 } = {}) {
   const needsUserResume = ref(false)
   const recovering = ref(false)
+  const lastError = ref(null)
   let canvasRef = null
   let work = Promise.resolve()
   let attached = false
+  let generation = 0
 
   function enqueue(operation) {
-    work = work.then(operation, operation)
+    const scheduledGeneration = generation
+    const guarded = async () => {
+      if (scheduledGeneration !== generation) return
+      try {
+        lastError.value = null
+        await operation()
+      } catch (error) {
+        if (scheduledGeneration === generation) lastError.value = error
+      }
+    }
+    work = work.then(guarded, guarded)
     return work
   }
 
@@ -69,12 +81,30 @@ export function createLifecycleRecovery({
   }
 
   async function resumeFromGesture() {
-    const resumed = await resume()
-    needsUserResume.value = resumed === false
-    return resumed
+    try {
+      lastError.value = null
+      const resumed = await resume()
+      needsUserResume.value = resumed === false
+      return resumed
+    } catch (error) {
+      lastError.value = error
+      return false
+    }
+  }
+
+  function retryRecovery() {
+    enqueue(async () => {
+      recovering.value = true
+      try {
+        await rebuild()
+      } finally {
+        recovering.value = false
+      }
+    })
   }
 
   function detach() {
+    generation += 1
     if (attached) documentRef.removeEventListener('visibilitychange', handleVisibility)
     canvasRef?.removeEventListener('webglcontextlost', handleContextLost)
     canvasRef?.removeEventListener('webglcontextrestored', handleContextRestored)
@@ -85,9 +115,11 @@ export function createLifecycleRecovery({
   return {
     needsUserResume,
     recovering,
+    lastError,
     attach,
     detach,
     resumeFromGesture,
+    retryRecovery,
   }
 }
 

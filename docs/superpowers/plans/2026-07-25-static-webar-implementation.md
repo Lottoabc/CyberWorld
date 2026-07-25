@@ -4,7 +4,7 @@
 
 **Goal:** Build a complete browser-only WebAR experience that captures up to five local image targets, compiles and tracks them with MindAR, persists content locally, and deploys under GitHub Pages at `/CyberWorld/`.
 
-**Architecture:** Vue owns application UI and serializable Pinia state while an imperative AR adapter owns an isolated A-Frame DOM subtree. MindAR's official Compiler performs browser-side compilation, IndexedDB stores binary assets, and a controlled scene rebuild swaps compiled target sets. Only one camera stream is active: the app owns it before the first target, and MindAR owns it while AR is active.
+**Architecture:** Vue owns application UI and serializable Pinia state while an imperative AR adapter owns an isolated A-Frame DOM subtree. MindAR's official Compiler performs browser-side compilation, IndexedDB atomically stores compiled data plus authoritative target order, and a controlled MindAR system restart swaps targets inside one retained A-Frame scene. Only one camera stream is active: the app owns it before the first target, and MindAR owns it while AR is active.
 
 **Tech Stack:** Vue 3 Composition API, Pinia, Vue Router hash history, Vite, Vitest, fake-indexeddb, MindAR 1.2.5 CDN build, A-Frame 1.5.0 CDN build, GitHub Actions/Pages.
 
@@ -428,7 +428,7 @@ With jsdom and fake AFRAME custom elements, verify:
 - mount appends one `<a-scene>` directly under the supplied container;
 - target entity count equals target count;
 - each entity uses the registry index;
-- swap removes all old scene nodes and listeners;
+- swap retains the scene, removes old target nodes, and releases the previous MindAR resize listener;
 - failed `arReady` causes Blob rollback;
 - destroy leaves the container empty.
 
@@ -443,7 +443,7 @@ device-orientation-permission-ui="enabled: false"
 renderer="colorManagement: true; physicallyCorrectLights: true"
 ```
 
-Append one camera and one target entity per registry entry. Start through `scene.systems['mindar-image-system'].start()` only after `renderstart`. Resolve mount on `arReady`; reject on `arError` or timeout. On swap, show callers a pending Promise, stop the old system, remove the old scene, build the staged scene, and commit the Blob lease only after `arReady`.
+Append one camera and one target entity per registry entry. Start through `scene.systems['mindar-image-system'].start()` only after `renderstart`. Resolve mount on `arReady`; reject on `arError` or timeout. On swap, stop the old system idempotently, retain the scene, clear the old target registry, configure the system with the staged URL, rebuild target nodes, and commit the Blob lease only after `arReady`. Capture and remove MindAR's anonymous resize listener on every restart.
 
 - [ ] **Step 5: Test five-frame projection smoothing**
 

@@ -1,5 +1,9 @@
 const DATABASE_NAME = 'cyberworld'
 const DATABASE_VERSION = 1
+const memoryImages = new Map()
+let memoryBuffer = null
+let memoryTargetIds = null
+let sessionOnly = false
 
 export function openCyberWorldDb(factory = globalThis.indexedDB) {
   if (!factory) {
@@ -47,26 +51,123 @@ async function execute(storeName, mode, operation) {
   })
 }
 
-export function putImage(id, blob) {
-  return execute('images', 'readwrite', (store) => store.put(blob, id))
+async function withFallback(databaseOperation, memoryOperation) {
+  if (sessionOnly) return memoryOperation()
+  try {
+    return await databaseOperation()
+  } catch {
+    sessionOnly = true
+    return memoryOperation()
+  }
 }
 
-export function getImage(id) {
-  return execute('images', 'readonly', (store) => store.get(id))
+export function isSessionOnlyPersistence() {
+  return sessionOnly
 }
 
-export function deleteImage(id) {
-  return execute('images', 'readwrite', (store) => store.delete(id))
+export async function putImage(id, blob) {
+  memoryImages.set(id, blob)
+  return withFallback(
+    () => execute('images', 'readwrite', (store) => store.put(blob, id)),
+    () => id,
+  )
 }
 
-export function putMindBuffer(buffer) {
-  return execute('compiled', 'readwrite', (store) => store.put(buffer, 'active'))
+export async function getImage(id) {
+  return withFallback(
+    async () => {
+      const value = await execute('images', 'readonly', (store) => store.get(id))
+      if (value) memoryImages.set(id, value)
+      return value
+    },
+    () => memoryImages.get(id) ?? null,
+  )
 }
 
-export function getMindBuffer() {
-  return execute('compiled', 'readonly', (store) => store.get('active'))
+export async function deleteImage(id) {
+  memoryImages.delete(id)
+  return withFallback(
+    () => execute('images', 'readwrite', (store) => store.delete(id)),
+    () => null,
+  )
 }
 
-export function deleteMindBuffer() {
-  return execute('compiled', 'readwrite', (store) => store.delete('active'))
+export async function putMindBuffer(buffer) {
+  memoryBuffer = buffer
+  return withFallback(
+    () => execute('compiled', 'readwrite', (store) => store.put(buffer, 'active')),
+    () => 'active',
+  )
+}
+
+export async function getMindBuffer() {
+  return withFallback(
+    async () => {
+      const value = await execute('compiled', 'readonly', (store) => store.get('active'))
+      if (value) memoryBuffer = value
+      return value
+    },
+    () => memoryBuffer,
+  )
+}
+
+export async function putCompiledState(buffer, targetIds) {
+  memoryBuffer = buffer
+  memoryTargetIds = [...targetIds]
+  return withFallback(
+    async () => {
+      const database = await openCyberWorldDb()
+      return new Promise((resolve, reject) => {
+        const transaction = database.transaction('compiled', 'readwrite')
+        const store = transaction.objectStore('compiled')
+        store.put(buffer, 'active')
+        store.put([...targetIds], 'targetIds')
+        transaction.oncomplete = () => {
+          database.close()
+          resolve()
+        }
+        transaction.onerror = transaction.onabort = () => {
+          database.close()
+          reject(transaction.error ?? new Error('Compiled state transaction failed'))
+        }
+      })
+    },
+    () => null,
+  )
+}
+
+export async function getCompiledTargetIds() {
+  return withFallback(
+    async () => {
+      const value = await execute('compiled', 'readonly', (store) => store.get('targetIds'))
+      if (Array.isArray(value)) memoryTargetIds = value
+      return Array.isArray(value) ? value : null
+    },
+    () => memoryTargetIds,
+  )
+}
+
+export async function deleteMindBuffer() {
+  memoryBuffer = null
+  memoryTargetIds = null
+  return withFallback(
+    async () => {
+      const database = await openCyberWorldDb()
+      return new Promise((resolve, reject) => {
+        const transaction = database.transaction('compiled', 'readwrite')
+        const store = transaction.objectStore('compiled')
+        store.delete('active')
+        store.delete('targetIds')
+        transaction.oncomplete = () => {
+          database.close()
+          resolve()
+        }
+        transaction.onerror = transaction.onabort = () => {
+          database.close()
+          reject(transaction.error ?? new Error('Compiled state delete failed'))
+        }
+      })
+    },
+    () => null,
+  )
 }
