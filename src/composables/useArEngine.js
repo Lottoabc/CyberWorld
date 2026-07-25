@@ -17,51 +17,6 @@ export function createArEngine({
   const sceneRef = shallowRef(null)
   let containerRef = null
   let currentTargets = []
-  let sceneGlobalListeners = []
-
-  function captureSceneGlobalListeners() {
-    const eventTypes = new Set([
-      'resize',
-      'orientationchange',
-      'fullscreenchange',
-      'webkitfullscreenchange',
-      'vrdisplaypresentchange',
-      'vrdisplayactivate',
-      'vrdisplaydeactivate',
-    ])
-    const patchedTargets = [windowRef, documentRef].filter(Boolean)
-    const originals = patchedTargets.map((target) => ({
-      target,
-      addEventListener: target.addEventListener,
-    }))
-    const captured = []
-
-    originals.forEach(({ target, addEventListener }) => {
-      target.addEventListener = function addSceneEventListener(type, listener, options) {
-        if (eventTypes.has(type)) captured.push({ target, type, listener, options })
-        return addEventListener.call(this, type, listener, options)
-      }
-    })
-
-    let stopped = false
-    return {
-      stop() {
-        if (stopped) return
-        stopped = true
-        originals.forEach(({ target, addEventListener }) => {
-          target.addEventListener = addEventListener
-        })
-        sceneGlobalListeners.push(...captured)
-      },
-    }
-  }
-
-  function removeSceneGlobalListeners() {
-    for (const { target, type, listener, options } of sceneGlobalListeners) {
-      target.removeEventListener(type, listener, options)
-    }
-    sceneGlobalListeners = []
-  }
 
   function patchSystemLifecycle(system) {
     if (!system || system.__cyberworldPatched) return
@@ -220,27 +175,43 @@ export function createArEngine({
   }
 
   async function mount(container, buffer, targets) {
+    containerRef = container
+
+    if (sceneRef.value && lease.activeUrl) {
+      const previousTargets = currentTargets
+      const previousUrl = lease.activeUrl
+      const stagedUrl = lease.stage(buffer)
+      containerRef.replaceChildren(sceneRef.value)
+      try {
+        currentTargets = [...targets]
+        await restart(stagedUrl, currentTargets)
+        lease.commit()
+        return sceneRef.value
+      } catch (error) {
+        lease.rollback()
+        currentTargets = previousTargets
+        try {
+          await restart(previousUrl, previousTargets)
+        } catch {
+          park()
+        }
+        throw error
+      }
+    }
+
     destroy()
     containerRef = container
     currentTargets = [...targets]
     const stagedUrl = lease.stage(buffer)
     const scene = buildScene(stagedUrl, currentTargets)
     sceneRef.value = scene
-    const listenerCapture = captureSceneGlobalListeners()
     const ready = startTracking(scene, true)
-    try {
-      containerRef.replaceChildren(scene)
-    } catch (error) {
-      listenerCapture.stop()
-      throw error
-    }
+    containerRef.replaceChildren(scene)
     try {
       await ready
-      listenerCapture.stop()
       lease.commit()
       return scene
     } catch (error) {
-      listenerCapture.stop()
       stopTracking(scene)
       scene.remove()
       sceneRef.value = null
@@ -294,6 +265,14 @@ export function createArEngine({
       .find((element) => element.dataset.targetId === targetId) ?? null
   }
 
+  function park() {
+    const scene = sceneRef.value
+    stopTracking(scene)
+    scene?.remove()
+    containerRef?.replaceChildren()
+    containerRef = null
+  }
+
   function destroy() {
     const scene = sceneRef.value
     stopTracking(scene)
@@ -303,7 +282,6 @@ export function createArEngine({
     containerRef = null
     currentTargets = []
     lease.dispose()
-    removeSceneGlobalListeners()
   }
 
   return {
@@ -315,8 +293,14 @@ export function createArEngine({
     getVideoElement,
     getCamera,
     getAnchor,
+    park,
     destroy,
   }
 }
 
-export const useArEngine = createArEngine
+let sharedArEngine
+
+export function useArEngine() {
+  sharedArEngine ??= createArEngine()
+  return sharedArEngine
+}

@@ -5,7 +5,7 @@ import MessageBoard from '../components/MessageBoard.vue'
 import { emojiTextureUrl } from '../components/TargetAnchor.js'
 import ToastHost from '../components/ToastHost.vue'
 import TransitionOverlay from '../components/TransitionOverlay.vue'
-import { createArEngine } from '../composables/useArEngine.js'
+import { useArEngine } from '../composables/useArEngine.js'
 import { createCameraStream } from '../composables/useCameraStream.js'
 import { createCoordinateProjector } from '../composables/useCoordinateProjector.js'
 import { createLifecycleRecovery } from '../composables/useLifecycleRecovery.js'
@@ -30,7 +30,7 @@ const targetStore = useTargetStore()
 const messageStore = useMessageStore()
 const camera = createCameraStream()
 const compiler = createTargetCompiler()
-const arEngine = createArEngine()
+const arEngine = useArEngine()
 const projector = createCoordinateProjector()
 
 const previewVideo = ref(null)
@@ -91,6 +91,7 @@ const lifecycle = createLifecycleRecovery({
     setOverlay({ visible: true, title: '正在恢复画面', detail: 'WebGL 已重置，正在重建追踪引擎。' })
     resetTracking()
     await mutateEngine(() => arEngine.swap(buffer, targetStore.targets))
+    ensureActive()
     bindTargetEvents(targetStore.targets)
     attachRecoveryCanvas()
     setOverlay({ visible: false })
@@ -238,6 +239,7 @@ async function mountExistingTargets() {
   }
   resetTracking()
   await mutateEngine(() => arEngine.mount(arMount.value, buffer, targetStore.targets))
+  ensureActive()
   bindTargetEvents(targetStore.targets)
   attachRecoveryCanvas()
 }
@@ -317,6 +319,7 @@ async function captureTarget() {
       await mutateEngine(() => arEngine.swap(buffer, nextTargets))
     }
     sceneUpdated = true
+    ensureActive()
     persistMetadata(nextTargets, messageStore.messages, true)
     targetStore.commitCandidate(candidate)
     bindTargetEvents(nextTargets)
@@ -359,8 +362,9 @@ async function removeTarget(target) {
     if (remaining.length === 0) {
       await deleteMindBuffer()
       resetTracking()
-      await mutateEngine(async () => arEngine.destroy())
+      await mutateEngine(async () => arEngine.park())
       sceneUpdated = true
+      ensureActive()
       await camera.start(previewVideo.value)
     } else {
       const blobs = await loadImages(remaining)
@@ -373,6 +377,7 @@ async function removeTarget(target) {
       resetTracking()
       await mutateEngine(() => arEngine.swap(buffer, remaining))
       sceneUpdated = true
+      ensureActive()
       bindTargetEvents(remaining)
       attachRecoveryCanvas()
     }
@@ -460,9 +465,11 @@ watch(lifecycle.lastError, (error) => {
 })
 
 onMounted(() => {
-  const state = loadLocalState()
-  targetStore.hydrate(state.targets)
-  messageStore.hydrate(state.messages)
+  if (!isSessionOnlyPersistence()) {
+    const state = loadLocalState()
+    targetStore.hydrate(state.targets)
+    messageStore.hydrate(state.messages)
+  }
   lifecycle.attach(null)
   projectionFrame = requestAnimationFrame(updateProjection)
 })
@@ -476,7 +483,8 @@ onBeforeUnmount(() => {
   engineMutation = engineMutation.finally(() => {
     camera.stop()
     resetTracking()
-    arEngine.destroy()
+    lifecycle.detach()
+    arEngine.park()
   })
 })
 </script>

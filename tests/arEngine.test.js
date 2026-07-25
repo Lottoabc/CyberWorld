@@ -55,32 +55,36 @@ describe('isolated AR engine', () => {
     engine.destroy()
   })
 
-  it('removes global listeners registered while an A-Frame scene starts', async () => {
+  it('parks and reuses the same scene across route-like remounts', async () => {
     const container = document.createElement('div')
-    const listener = vi.fn()
+    const nextContainer = document.createElement('div')
+    const system = {
+      start: vi.fn(),
+      stop: vi.fn(),
+      setup: vi.fn(),
+      anchorEntities: [],
+      video: document.createElement('video'),
+    }
     const engine = createArEngine({
       urlApi: {
-        createObjectURL: vi.fn(() => 'blob:test'),
+        createObjectURL: vi.fn()
+          .mockReturnValueOnce('blob:first')
+          .mockReturnValueOnce('blob:second'),
         revokeObjectURL: vi.fn(),
       },
       sceneStarter: async (scene) => {
-        window.addEventListener('resize', listener)
-        scene.systems = {
-          'mindar-image-system': {
-            start: vi.fn(),
-            stop: vi.fn(),
-            video: document.createElement('video'),
-          },
-        }
+        scene.systems ??= { 'mindar-image-system': system }
       },
     })
 
     await engine.mount(container, new ArrayBuffer(2), [{ id: 'a', emoji: '✨' }])
-    window.dispatchEvent(new Event('resize'))
-    expect(listener).toHaveBeenCalledOnce()
+    const originalScene = engine.scene.value
+    engine.park()
+    expect(container.children).toHaveLength(0)
 
+    await engine.mount(nextContainer, new ArrayBuffer(2), [{ id: 'b', emoji: '🎝' }])
+    expect(engine.scene.value).toBe(originalScene)
+    expect(nextContainer.querySelectorAll('a-scene')).toHaveLength(1)
     engine.destroy()
-    window.dispatchEvent(new Event('resize'))
-    expect(listener).toHaveBeenCalledOnce()
   })
 })
