@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import EditorToolbar from '../components/EditorToolbar.vue'
 import MessageBoard from '../components/MessageBoard.vue'
 import ToastHost from '../components/ToastHost.vue'
@@ -7,6 +7,7 @@ import TransitionOverlay from '../components/TransitionOverlay.vue'
 import { createArEngine } from '../composables/useArEngine.js'
 import { createCameraStream } from '../composables/useCameraStream.js'
 import { createCoordinateProjector } from '../composables/useCoordinateProjector.js'
+import { createLifecycleRecovery } from '../composables/useLifecycleRecovery.js'
 import { createTargetCompiler } from '../composables/useTargetCompiler.js'
 import {
   deleteImage,
@@ -45,6 +46,30 @@ const overlay = reactive({
 
 let toastSerial = 0
 let projectionFrame = 0
+
+const lifecycle = createLifecycleRecovery({
+  pause() {
+    if (targetStore.targets.length > 0) arEngine.pause()
+    else previewVideo.value?.pause()
+  },
+  async resume() {
+    const video = targetStore.targets.length > 0 ? arEngine.getVideoElement() : previewVideo.value
+    if (!video) return true
+    const resumed = await camera.resume(video)
+    if (resumed && targetStore.targets.length > 0) arEngine.resume()
+    return resumed
+  },
+  async rebuild() {
+    if (targetStore.targets.length === 0) return
+    const buffer = await getMindBuffer()
+    if (!buffer) throw new Error('找不到已编译的 AR 数据')
+    setOverlay({ visible: true, title: '正在恢复画面', detail: 'WebGL 已重置，正在重建追踪引擎。' })
+    await arEngine.swap(buffer, targetStore.targets)
+    bindTargetEvents(targetStore.targets)
+    attachRecoveryCanvas()
+    setOverlay({ visible: false })
+  },
+})
 
 const activeTarget = computed(() =>
   targetStore.targets.find((target) => target.id === targetStore.activeTargetId) ?? null,
@@ -108,6 +133,11 @@ function bindTargetEvents(targets) {
   })
 }
 
+function attachRecoveryCanvas() {
+  const scene = arEngine.scene.value
+  lifecycle.attach(scene?.canvas ?? scene?.querySelector?.('canvas') ?? null)
+}
+
 function updateProjection() {
   if (activeTarget.value) {
     const anchor = arEngine.getAnchor(activeTarget.value.id)
@@ -134,6 +164,7 @@ async function mountExistingTargets() {
   }
   await arEngine.mount(arMount.value, buffer, targetStore.targets)
   bindTargetEvents(targetStore.targets)
+  attachRecoveryCanvas()
 }
 
 async function startScanning() {
@@ -201,6 +232,7 @@ async function captureTarget() {
     targetStore.commitCandidate(candidate)
     persistMetadata()
     bindTargetEvents(nextTargets)
+    attachRecoveryCanvas()
     setOverlay({ visible: false })
     showToast('新参照物已可识别', '✦')
   } catch (error) {
@@ -239,6 +271,7 @@ async function removeTarget(target) {
       messageStore.removeForTarget(target.id)
       await deleteImage(target.imageKey).catch(() => {})
       bindTargetEvents(remaining)
+      attachRecoveryCanvas()
     }
     targetStore.finishCompile()
     persistMetadata()
@@ -275,15 +308,37 @@ function setEmoji(emoji) {
   persistMetadata()
 }
 
+async function handleOverlayAction() {
+  if (lifecycle.needsUserResume.value) {
+    const resumed = await lifecycle.resumeFromGesture()
+    if (resumed) setOverlay({ visible: false })
+    return
+  }
+  await startScanning()
+}
+
+watch(lifecycle.needsUserResume, (needed) => {
+  if (needed) {
+    setOverlay({
+      visible: true,
+      title: '点击继续扫描',
+      detail: '浏览器需要再次确认播放摄像头画面。',
+      actionLabel: '继续扫描',
+    })
+  }
+})
+
 onMounted(() => {
   const state = loadLocalState()
   targetStore.hydrate(state.targets)
   messageStore.hydrate(state.messages)
+  lifecycle.attach(null)
   projectionFrame = requestAnimationFrame(updateProjection)
 })
 
 onBeforeUnmount(() => {
   cancelAnimationFrame(projectionFrame)
+  lifecycle.detach()
   camera.stop()
   arEngine.destroy()
 })
@@ -353,7 +408,7 @@ onBeforeUnmount(() => {
     <ToastHost :items="toasts" />
     <TransitionOverlay
       v-bind="overlay"
-      @action="startScanning"
+      @action="handleOverlayAction"
     />
   </main>
 </template>

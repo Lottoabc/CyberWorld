@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createCameraStream } from '../src/composables/useCameraStream.js'
 import { createTargetCompiler } from '../src/composables/useTargetCompiler.js'
 import { createCoordinateProjector } from '../src/composables/useCoordinateProjector.js'
+import { createLifecycleRecovery } from '../src/composables/useLifecycleRecovery.js'
 import { createEmptyState, loadLocalState, saveLocalState } from '../src/persistence/localState.js'
 import { deleteImage, getImage, getMindBuffer, putImage, putMindBuffer } from '../src/persistence/indexedDb.js'
 import { useMessageStore } from '../src/stores/messages.js'
@@ -126,4 +127,23 @@ test('coordinate projection smooths the latest five frames', () => {
   for (let index = 0; index < 5; index += 1) point = projector.project(target, {})
   assert.equal(Math.round(point.x), 80)
   assert.equal(Math.round(point.y), 50)
+})
+
+test('lifecycle recovery pauses hidden pages and asks for a resume gesture', async () => {
+  const documentRef = new EventTarget()
+  documentRef.visibilityState = 'hidden'
+  let paused = 0
+  const lifecycle = createLifecycleRecovery({
+    documentRef,
+    pause: () => { paused += 1 },
+    resume: async () => false,
+  })
+  lifecycle.attach(null)
+  documentRef.dispatchEvent(new Event('visibilitychange'))
+  assert.equal(paused, 1)
+  documentRef.visibilityState = 'visible'
+  documentRef.dispatchEvent(new Event('visibilitychange'))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(lifecycle.needsUserResume.value, true)
+  lifecycle.detach()
 })
